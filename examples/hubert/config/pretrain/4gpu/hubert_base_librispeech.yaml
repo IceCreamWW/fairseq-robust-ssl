@@ -16,9 +16,9 @@ checkpoint:
 distributed_training:
   ddp_backend: no_c10d
   distributed_backend: 'nccl'
-  distributed_world_size: 8
-  distributed_port: 29671
-  nprocs_per_node: 2
+  distributed_world_size: 4
+  distributed_port: 19570
+  nprocs_per_node: 1
   find_unused_parameters: true
 
 task:
@@ -50,7 +50,7 @@ criterion:
 
 optimization:
   max_update: 400000
-  update_freq: [8]
+  update_freq: [16]
   lr: [0.0005]
   clip_norm: 10.0
 

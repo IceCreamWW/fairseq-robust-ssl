@@ -18,7 +18,7 @@ distributed_training:
   distributed_backend: 'nccl'
   distributed_world_size: 8
   distributed_port: 29671
-  nprocs_per_node: 2
+  nprocs_per_node: 1
   find_unused_parameters: true
 
 task:
@@ -37,7 +37,7 @@ task:
 dataset:
   num_workers: 6
   # max_tokens: 1400000
-  max_tokens: 700000
+  max_tokens: 800000
   skip_invalid_size_inputs_valid_test: true
   validate_interval: 5
   validate_interval_updates: 10000
@@ -49,8 +49,8 @@ criterion:
   loss_weights: [10,]
 
 optimization:
-  max_update: 400000
-  update_freq: [8]
+  max_update: 250000
+  update_freq: [7]
   lr: [0.0005]
   clip_norm: 10.0
 

@@ -255,6 +255,7 @@ class FileAudioDataset(RawAudioDataset):
         shuffle=True,
         pad=False,
         normalize=False,
+        use_kaldi_style_datadir=False,
         num_buckets=0,
         compute_mask_indices=False,
         text_compression_level=TextCompressionLevel.none,
@@ -278,20 +279,39 @@ class FileAudioDataset(RawAudioDataset):
         sizes = []
         self.skipped_indices = set()
 
-        with open(manifest_path, "r") as f:
-            self.root_dir = f.readline().strip()
-            for i, line in enumerate(f):
-                items = line.strip().split("\t")
-                assert len(items) == 2, line
-                sz = int(items[1])
-                if min_sample_size is not None and sz < min_sample_size:
-                    skipped += 1
-                    self.skipped_indices.add(i)
-                    continue
-                self.fnames.append(self.text_compressor.compress(items[0]))
-                sizes.append(sz)
-        logger.info(f"loaded {len(self.fnames)}, skipped {skipped} samples")
+        if not use_kaldi_style_datadir:
+            with open(manifest_path, "r") as f:
+                self.root_dir = f.readline().strip()
+                for i, line in enumerate(f):
+                    items = line.strip().split("\t")
+                    assert len(items) == 2, line
+                    sz = int(items[1])
+                    if min_sample_size is not None and sz < min_sample_size:
+                        skipped += 1
+                        self.skipped_indices.add(i)
+                        continue
+                    self.fnames.append(self.text_compressor.compress(items[0]))
+                    sizes.append(sz)
+        else:
+            manifest_dir = os.path.dirname(manifest_path)
+            split = os.path.basename(manifest_path).split(".")[0] # train, valid
 
+            path_to_wav_scp = os.path.join(manifest_dir, split, "wav.scp")
+            path_to_utt2dur = os.path.join(manifest_dir, split, "utt2dur")
+            with path_to_wav_scp as fp_wav, open(path_to_utt2dur) as fp_utt2dur:
+                for i, (line_wav_scp, line_utt2dur) in enumerate(zip(fp_wav, fp_utt2dur), 1):
+                    uttid, path_to_audio = line_wav_scp.strip().split(maxsplit=1)
+                    uttid_, dur = line_utt2dur.strip().split()
+                    dur = int(dur)
+                    assert uttid == uttid_, f"uttid {uttid} != {uttid_} at line {i} of {path_to_wav_scp} and {path_to_utt2dur}"
+                    if min_length is not None and dur < min_length:
+                        skipped += 1
+                        continue
+
+                self.fnames.append(self.text_compressor.compress(path_to_audio))
+                sizes.append(dur)
+
+        logger.info(f"loaded {len(self.fnames)}, skipped {skipped} samples")
         self.sizes = np.array(sizes, dtype=np.int64)
 
         try:
@@ -307,19 +327,24 @@ class FileAudioDataset(RawAudioDataset):
         self.set_bucket_info(num_buckets)
 
     def __getitem__(self, index):
-        import soundfile as sf
+        if not self.use_kaldi_style_datadir:
+            import soundfile as sf
 
-        fn = self.fnames[index]
-        fn = fn if isinstance(self.fnames, list) else fn.as_py()
-        fn = self.text_compressor.decompress(fn)
-        path_or_fp = os.path.join(self.root_dir, fn)
-        _path, slice_ptr = parse_path(path_or_fp)
-        if len(slice_ptr) == 2:
-            byte_data = read_from_stored_zip(_path, slice_ptr[0], slice_ptr[1])
-            assert is_sf_audio_data(byte_data)
-            path_or_fp = io.BytesIO(byte_data)
+            fn = self.fnames[index]
+            fn = fn if isinstance(self.fnames, list) else fn.as_py()
+            fn = self.text_compressor.decompress(fn)
+            path_or_fp = os.path.join(self.root_dir, fn)
+            _path, slice_ptr = parse_path(path_or_fp)
+            if len(slice_ptr) == 2:
+                byte_data = read_from_stored_zip(_path, slice_ptr[0], slice_ptr[1])
+                assert is_sf_audio_data(byte_data)
+                path_or_fp = io.BytesIO(byte_data)
 
-        wav, curr_sample_rate = sf.read(path_or_fp, dtype="float32")
+            wav, curr_sample_rate = sf.read(path_or_fp, dtype="float32")
+        else:
+            import kaldiio
+            fn = self.text_compressor.decompress(self.fnames[index])
+            curr_sample_rate, wav = kaldiio.load_mat(fn)
 
         feats = torch.from_numpy(wav).float()
         feats = self.postprocess(feats, curr_sample_rate)

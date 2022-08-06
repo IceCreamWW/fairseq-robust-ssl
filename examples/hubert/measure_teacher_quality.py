@@ -3,11 +3,14 @@
 # This source code is licensed under the MIT license found in the
 # LICENSE file in the root directory of this source tree.
 
+# python measure_teacher_quality.py data/ls_960/ dump/raw/ls_960/km_from_mfcc_ls960/ km --phn_dir dump/raw/ls_960/phone_frame_align/ --phn_sets dev_clean dev_other --upsample 1 --verbose
+
 import numpy as np
 import os.path as op
 import re
 from tabulate import tabulate
 from collections import Counter
+import pdb
 
 
 def comp_purity(p_xy, axis):
@@ -52,6 +55,7 @@ def comp_avg_seg_dur(labs_list):
 
 
 def comp_joint_prob(uid2refs, uid2hyps):
+    # pdb.set_trace()
     """
     Args:
         pad: padding for spliced-feature derived labels
@@ -88,21 +92,22 @@ def read_phn(tsv_path, rm_stress=True):
     uid2phns = {}
     with open(tsv_path) as f:
         for line in f:
-            uid, phns = line.rstrip().split("\t")
-            phns = phns.split(",")
+            # uid, phns = line.rstrip().split("\t")
+            # phns = phns.split(",")
+            uid, phns = line.rstrip().split(maxsplit=1)
+            phns = phns.split()
             if rm_stress:
                 phns = [re.sub("[0-9]", "", phn) for phn in phns]
             uid2phns[uid] = phns
     return uid2phns
 
 
-def read_lab(tsv_path, lab_path, pad_len=0, upsample=1):
+def read_lab(uid_path, lab_path, pad_len=0, upsample=1):
     """
     tsv is needed to retrieve the uids for the labels
     """
-    with open(tsv_path) as f:
-        f.readline()
-        uids = [op.splitext(op.basename(line.rstrip().split()[0]))[0] for line in f]
+    with open(uid_path) as f:
+        uids = [line.rstrip() for line in f]
     with open(lab_path) as f:
         labs_list = [pad(line.rstrip().split(), pad_len).repeat(upsample) for line in f]
     assert len(uids) == len(labs_list)
@@ -125,7 +130,7 @@ def main_lab_lab(
 
     uid2refs = {}
     for s in lab_sets:
-        uid2refs.update(read_lab(f"{tsv_dir}/{s}.tsv", f"{ref_dir}/{s}.{ref_name}"))
+        uid2refs.update(read_lab(f"{tsv_dir}/{s}.uid", f"{ref_dir}/{s}.{ref_name}"))
 
     uid2hyps = {}
     for s in lab_sets:
@@ -157,13 +162,14 @@ def main_phn_lab(
     for s in lab_sets:
         uid2hyps.update(
             read_lab(
-                f"{tsv_dir}/{s}.tsv", f"{lab_dir}/{s}.{lab_name}", pad_len, upsample
+                f"{tsv_dir}/{s}.uid", f"{lab_dir}/{s}.{lab_name}", pad_len, upsample
             )
         )
     _main(uid2refs, uid2hyps, verbose)
 
 
 def _main(uid2refs, uid2hyps, verbose):
+    # pdb.set_trace()
     (p_xy, ref2pid, hyp2lid, tot, frmdiff, skipped) = comp_joint_prob(
         uid2refs, uid2hyps
     )

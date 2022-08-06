@@ -6,7 +6,7 @@
 import contextlib
 from argparse import Namespace
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Optional
 
 import torch
 import torch.nn as nn
@@ -18,6 +18,8 @@ from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.models import BaseFairseqModel, FairseqEncoder, register_model
 from fairseq.models.hubert.hubert import MASKING_DISTRIBUTION_CHOICES
 from fairseq.tasks import FairseqTask
+
+import pdb
 
 
 @dataclass
@@ -120,6 +122,11 @@ class HubertAsrConfig(FairseqDataclass):
     )
     normalize: bool = II("task.normalize")
     data: str = II("task.data")
+
+    layer: Optional[int] = field(
+        default=None,
+        metadata={"help": "select layer hubert feature"},
+    )
 
     # this holds the loaded hubert args
     w2v_args: Any = None
@@ -227,6 +234,7 @@ class HubertSeq2SeqConfig(HubertAsrConfig):
 class HubertEncoder(FairseqEncoder):
     def __init__(self, cfg: HubertAsrConfig, task):
         self.apply_mask = cfg.apply_mask
+        self.layer = cfg.layer
 
         arg_overrides = {
             "dropout": cfg.dropout,
@@ -304,10 +312,12 @@ class HubertEncoder(FairseqEncoder):
 
     def forward(self, source, padding_mask, tbc=True, **kwargs):
 
+        # pdb.set_trace()
         w2v_args = {
             "source": source,
             "padding_mask": padding_mask,
             "mask": self.apply_mask and self.training,
+            "output_layer": self.layer
         }
 
         ft = self.freeze_finetune_updates <= self.num_updates

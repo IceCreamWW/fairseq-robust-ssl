@@ -5,11 +5,13 @@
 
 import logging
 import os
+import re
 import sys
 
 import soundfile as sf
 import torch
 import torchaudio
+import kaldiio
 
 from feature_utils import get_path_iterator, dump_feature
 
@@ -27,7 +29,10 @@ class MfccFeatureReader(object):
         self.sample_rate = sample_rate
 
     def read_audio(self, path, ref_len=None):
-        wav, sr = sf.read(path)
+        if re.match(r".*\.ark:\d+", path): # kaldi ark style audio path
+            sr, wav = kaldiio.load_mat(path)
+        else:
+            wav, sr = sf.read(path)
         assert sr == self.sample_rate, sr
         if wav.ndim == 2:
             wav = wav.mean(-1)

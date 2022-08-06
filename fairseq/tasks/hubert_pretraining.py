@@ -101,6 +101,37 @@ class HubertPretrainingConfig(FairseqDataclass):
         metadata={"help": "pad audio to the longest one in the batch if true"},
     )
 
+    noises: List[str] = field(
+        default_factory=lambda: [],
+        metadata={
+            "help": (
+                "path to noise files"
+                "lines of (uttid, path, num_samples)"
+            )
+        },
+    )
+    rirs: List[str] = field(
+        default_factory=lambda: [],
+        metadata={
+            "help": (
+                "path to rir files"
+                "lines of (uttid, path, num_samples)"
+            )
+        },
+    )
+    noise_snr: List[int] = field(
+        default_factory=lambda: [5, 10],
+        metadata={ "help": "noise snr [lower, upper]" },
+    )
+    num_noise: List[int] = field(
+        default_factory=lambda: [1, 1],
+        metadata={ "help": "num noises [lower, upper]" },
+    )
+    aug_types: List[str] = field(
+        default_factory=lambda: [],
+        metadata={ "help": "augment types, ['reverberate', 'additive']" },
+    )
+
 
 @register_task("hubert_pretraining", dataclass=HubertPretrainingConfig)
 class HubertPretrainingTask(FairseqTask):
@@ -182,6 +213,12 @@ class HubertPretrainingTask(FairseqTask):
             store_labels=False,
             random_crop=self.cfg.random_crop,
             single_target=self.cfg.single_target,
+            noise_manifest_paths=self.cfg.noises,
+            rir_manifest_paths=self.cfg.rirs,
+            noise_snr=self.cfg.noise_snr,
+            num_noise=self.cfg.num_noise,
+            aug_types=self.cfg.aug_types,
+            train=(split=="train"),
         )
 
     def max_positions(self) -> Tuple[int, int]:

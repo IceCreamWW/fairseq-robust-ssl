@@ -35,6 +35,8 @@ from fairseq.utils import buffered_arange, index_put, is_xla_tensor
 
 from .utils import pad_to_multiple
 
+import pdb
+
 EXTRACTOR_MODE_CHOICES = ChoiceEnum(["default", "layer_norm"])
 MASKING_DISTRIBUTION_CHOICES = ChoiceEnum(["static", "uniform", "normal", "poisson"])
 LAYER_TYPE_CHOICES = ChoiceEnum(["transformer", "conformer"])
@@ -260,7 +262,7 @@ class Wav2Vec2Config(FairseqDataclass):
 
     # FP16 optimization
     required_seq_len_multiple: int = field(
-        default=2,
+        default=1,
         metadata={
             "help": "pad the input to encoder such that the sequence length is divisible by multiple"
         },
@@ -953,6 +955,9 @@ class TransformerEncoder(nn.Module):
         self.embedding_dim = args.encoder_embed_dim
         self.required_seq_len_multiple = args.required_seq_len_multiple
 
+        # TODO: remove when switch to normal training
+        self.required_seq_len_multiple = 1
+
         pos_conv_depth = getattr(args, "pos_conv_depth", 1)
         if pos_conv_depth > 1:
             num_layers = args.pos_conv_depth
@@ -1029,6 +1034,7 @@ class TransformerEncoder(nn.Module):
         x, pad_length = pad_to_multiple(
             x, self.required_seq_len_multiple, dim=-2, value=0
         )
+        pad_length = 0
         if pad_length > 0 and padding_mask is None:
             padding_mask = x.new_zeros((x.size(0), x.size(1)), dtype=torch.bool)
             padding_mask[:, -pad_length:] = True
@@ -1191,7 +1197,7 @@ class TransformerSentenceEncoderLayer(nn.Module):
     ) -> None:
 
         super().__init__()
-        # Initialize parameters
+        #phn_ Initialize parameters
         self.embedding_dim = embedding_dim
         self.dropout = dropout
         self.activation_dropout = activation_dropout

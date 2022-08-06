@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional, Tuple, Type
 
 from fairseq.dataclass import FairseqDataclass
 from fairseq.dataclass.configs import FairseqConfig
+
 from hydra.core.global_hydra import GlobalHydra
 from hydra.experimental import compose, initialize
 from omegaconf import DictConfig, OmegaConf, open_dict, _utils
@@ -457,6 +458,7 @@ def overwrite_args_by_name(cfg: DictConfig, overrides: Dict[str, any]):
                             cfg[k][ok] = ov
                 else:
                     overwrite_args_by_name(cfg[k], overrides)
+
             elif k in cfg and isinstance(cfg[k], Namespace):
                 for override_key, val in overrides.items():
                     setattr(cfg[k], override_key, val)
@@ -475,6 +477,17 @@ def overwrite_args_by_name(cfg: DictConfig, overrides: Dict[str, any]):
 
 
 def merge_with_parent(dc: FairseqDataclass, cfg: DictConfig, remove_missing=False):
+
+    # from fairseq.tasks.hubert_pretraining import HubertPretrainingConfig
+    cfg = OmegaConf.merge(
+        OmegaConf.structured(
+             dc
+        ),
+        OmegaConf.create(
+            OmegaConf.to_yaml(cfg, resolve=True)
+        )
+    )
+
     if remove_missing:
 
         if is_dataclass(dc):

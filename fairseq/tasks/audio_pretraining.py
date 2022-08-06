@@ -82,6 +82,9 @@ class AudioPretrainingConfig(FairseqDataclass):
         default=0,
         metadata={"help": "number of buckets"},
     )
+    use_kaldi_style_datadir: bool = field(
+        default=True, metadata= {"help": "true if data dir is prepared in kaldi style (utt2dur required)"}
+    )
     precompute_mask_indices: bool = field(
         default=False,
         metadata={
@@ -168,6 +171,7 @@ class AudioPretrainingTask(FairseqTask):
                 min_sample_size=self.cfg.min_sample_size,
                 pad=task_cfg.labels is not None or task_cfg.enable_padding,
                 normalize=task_cfg.normalize,
+                use_kaldi_style_datadir=self.cfg.use_kaldi_style_datadir,
                 num_buckets=self.cfg.num_batch_buckets or int(self.cfg.tpu),
                 compute_mask_indices=(self.cfg.precompute_mask_indices or self.cfg.tpu),
                 text_compression_level=text_compression_level,

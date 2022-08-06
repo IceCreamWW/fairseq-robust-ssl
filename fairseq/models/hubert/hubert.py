@@ -13,6 +13,7 @@ import torch.nn as nn
 from omegaconf import II
 
 from fairseq import utils
+from fairseq import checkpoint_utils, tasks, utils
 from fairseq.data.data_utils import compute_mask_indices
 from fairseq.data.dictionary import Dictionary
 from fairseq.dataclass import ChoiceEnum, FairseqDataclass
@@ -29,6 +30,7 @@ from fairseq.tasks.hubert_pretraining import (
     HubertPretrainingConfig,
     HubertPretrainingTask,
 )
+import pdb
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +47,7 @@ class HubertConfig(FairseqDataclass):
             "has layer norms in every block (meant to use with normalize=True)"
         },
     )
+    init: Optional[str] = field(default=None, metadata={"help": "path to hubert model for initialization"})
     encoder_layers: int = field(
         default=12, metadata={"help": "num encoder layers in the transformer"}
     )
@@ -333,6 +336,10 @@ class HubertModel(BaseFairseqModel):
         """Build a new model instance."""
 
         model = HubertModel(cfg, task.cfg, task.dictionaries)
+        if cfg.init is not None:
+            state = checkpoint_utils.load_checkpoint_to_cpu(cfg.init, {})
+            model.load_state_dict(state["model"], strict=True)
+            logger.info(f"model initialized from {cfg.init}")
         return model
 
     def apply_mask(self, x, padding_mask, target_list):
@@ -427,6 +434,7 @@ class HubertModel(BaseFairseqModel):
     def forward(
         self,
         source: torch.Tensor,
+        source_aug: torch.Tensor = None,
         target_list: Optional[List[torch.Tensor]] = None,
         padding_mask: Optional[torch.Tensor] = None,
         mask: bool = True,
@@ -434,6 +442,10 @@ class HubertModel(BaseFairseqModel):
         output_layer: Optional[int] = None,
     ) -> Dict[str, torch.Tensor]:
         """output layer is 1-based"""
+
+        if source_aug is not None:
+            source = source_aug
+
         features = self.forward_features(source)
         if target_list is not None:
             features, target_list = self.forward_targets(features, target_list)

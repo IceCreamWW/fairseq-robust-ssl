@@ -5,11 +5,18 @@
 
 import logging
 import os
+os.environ["OMP_NUM_THREADS"] = "2" # export OMP_NUM_THREADS=1
+os.environ["OPENBLAS_NUM_THREADS"] = "2" # export OPENBLAS_NUM_THREADS=1
+os.environ["MKL_NUM_THREADS"] = "2" # export MKL_NUM_THREADS=1
+os.environ["VECLIB_MAXIMUM_THREADS"] = "2" # export VECLIB_MAXIMUM_THREADS=1
+os.environ["NUMEXPR_NUM_THREADS"] = "2" # export NUMEXPR_NUM_THREADS=1
 import sys
+import re
 
 import fairseq
 import soundfile as sf
 import torch
+import kaldiio
 import torch.nn.functional as F
 
 from feature_utils import get_path_iterator, dump_feature
@@ -31,7 +38,12 @@ class HubertFeatureReader(object):
             cfg,
             task,
         ) = fairseq.checkpoint_utils.load_model_ensemble_and_task([ckpt_path])
-        self.model = model[0].eval().cuda()
+        if torch.cuda.is_available():
+            self.device = torch.device('cuda')
+        else:
+            self.device = torch.device('cpu')
+
+        self.model = model[0].eval().to(device=self.device)
         self.task = task
         self.layer = layer
         self.max_chunk = max_chunk
@@ -39,7 +51,11 @@ class HubertFeatureReader(object):
         logger.info(f" max_chunk = {self.max_chunk}")
 
     def read_audio(self, path, ref_len=None):
-        wav, sr = sf.read(path)
+
+        if re.match(r".*\.ark:\d+", path): # kaldi ark style audio path
+            sr, wav = kaldiio.load_mat(path)
+        else:
+            wav, sr = sf.read(path)
         assert sr == self.task.cfg.sample_rate, sr
         if wav.ndim == 2:
             wav = wav.mean(-1)
@@ -51,7 +67,7 @@ class HubertFeatureReader(object):
     def get_feats(self, path, ref_len=None):
         x = self.read_audio(path, ref_len)
         with torch.no_grad():
-            x = torch.from_numpy(x).float().cuda()
+            x = torch.from_numpy(x).float().to(device=self.device)
             if self.task.cfg.normalize:
                 x = F.layer_norm(x, x.shape)
             x = x.view(1, -1)

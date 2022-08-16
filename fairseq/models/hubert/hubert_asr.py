@@ -19,6 +19,8 @@ from fairseq.models import BaseFairseqModel, FairseqEncoder, register_model
 from fairseq.models.hubert.hubert import MASKING_DISTRIBUTION_CHOICES
 from fairseq.tasks import FairseqTask
 
+from fairseq.interfaces.hook import Hookable
+
 import pdb
 
 

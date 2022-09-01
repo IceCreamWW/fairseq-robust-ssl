@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from omegaconf import II
 
 from fairseq import utils
@@ -17,6 +18,7 @@ from fairseq import checkpoint_utils, tasks, utils
 from fairseq.data.data_utils import compute_mask_indices
 from fairseq.data.dictionary import Dictionary
 from fairseq.dataclass import ChoiceEnum, FairseqDataclass
+from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.models import BaseFairseqModel, register_model
 from fairseq.models.wav2vec.wav2vec2 import (
     EXTRACTOR_MODE_CHOICES,
@@ -50,7 +52,9 @@ class HubertRobustConfig(FairseqDataclass):
         },
     )
     init: Optional[str] = field(default=None, metadata={"help": "path to hubert model for initialization"})
-    teacher: str = field(default=None, metadata={"help": "path to teacher hubert model"})
+    teacher: str = field(default="", metadata={"help": "path to teacher hubert model"})
+    teacher_layer_weights: Optional[str] = field(default=None, metadata={"help": "path to weight vector"})
+    compute_kd_layer_interval: int = field(default=1, metadata={"help": "compute kd loss (default as l1) every n layers [bigger value to reduce cuda memory]"})
     encoder_layers: int = field(
         default=12, metadata={"help": "num encoder layers in the transformer"}
     )
@@ -242,6 +246,7 @@ class HubertRobustConfig(FairseqDataclass):
         metadata={"help": "Positional encoding type to use in conformer"},
     )
     fp16: bool = field(default=False, metadata={"help": "If fp16 is being used"})
+    data: str = II("task.data")
 
 
 @register_model("hubert_robust", dataclass=HubertRobustConfig)
@@ -251,6 +256,8 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
         cfg: HubertRobustConfig,
         task_cfg: HubertPretrainingConfig,
         dictionaries: List[Dictionary],
+        teacher: nn.Module,
+        teacher_layer_weights: Optional[torch.Tensor] = None,
     ) -> None:
 
         BaseFairseqModel.__init__(self)
@@ -331,26 +338,90 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
             )
             nn.init.uniform_(self.label_embs_concat)
 
+        self.teacher = teacher
+        self.teacher_layer_weights = teacher_layer_weights
+
+        self.compute_kd_layer_interval = cfg.compute_kd_layer_interval
+
+        if len(self.hooks) == 0:
+            for module_name in ["self.teacher.encoder.layers", "self.encoder.layers"]:
+                for module_id in range(0, len(eval(module_name)), self.compute_kd_layer_interval):
+                    self.add_hook(
+                        f"{module_name}[{module_id}]",
+                        lambda input, output: input[0].transpose(0, 1),
+                    )
+                self.add_hook(module_name.removesuffix(".layers"), lambda input, output: output[0])
+
+            def postprocess(xs):
+                names, hiddens = zip(*xs)
+                unpad_len = min([hidden.size(1) for hidden in hiddens])
+                hiddens = [hidden[:, :unpad_len, :] for hidden in hiddens]
+                return list(zip(names, hiddens))
+            self.hook_postprocess = postprocess
+
+        self.criterion_kd_l1 = nn.L1Loss(reduction='mean')
+        self.criterion_kd_kld = nn.KLDivLoss(reduction='batchmean')
+
+#     @property
+#     def teacher(self):
+#         return self._teacher[0]
+
     def upgrade_state_dict_named(self, state_dict, name):
         """Upgrade a (possibly old) state dict for new versions of fairseq."""
 
         super().upgrade_state_dict_named(state_dict, name)
         return state_dict
 
-    @property
-    def teacher(self):
-        return self._teacher[0]
-
     @classmethod
     def build_model(cls, cfg: HubertRobustConfig, task: HubertPretrainingTask):
         """Build a new model instance."""
 
-        model = HubertRobustModel(cfg, task.cfg, task.dictionaries)
-        model._teacher, _, _ = checkpoint_utils.load_model_ensemble_and_task([cfg.teacher])
+        arg_overrides = {
+            "dropout": 0,
+            "activation_dropout": 0,
+            "dropout_input": 0,
+            "attention_dropout": 0,
+            "mask_prob": 0,
+            "skip_masked": True,
+            "mask_channel_prob": 0,
+            "encoder_layerdrop": 0,
+            "feature_grad_mult": 0,
+        }
+        state = checkpoint_utils.load_checkpoint_to_cpu(cfg.teacher, arg_overrides)
+        teacher_args = state.get("cfg", None)
+        if teacher_args is None:
+            teacher_args = convert_namespace_to_omegaconf(state["args"])
+
+        teacher_args.task.data = cfg.data
+        pretrain_task = tasks.setup_task(teacher_args.task)
+        if state is not None and "task_state" in state:
+            # This will load the stored "dictionaries" object
+            pretrain_task.load_state_dict(state["task_state"])
+        else:
+            pretrain_task.load_state_dict(task.state_dict())
+
+        teacher = pretrain_task.build_model(teacher_args.model, from_checkpoint=True)
+        if state is not None:
+            # set strict=False because we omit some modules
+            teacher.load_state_dict(state["model"], strict=True)
+
+        for param in teacher.parameters():
+            param.requires_grad = False
+
+
+        teacher_layer_weights = None
+        if cfg.teacher_layer_weights is not None:
+            pdb.set_trace()
+#         teacher.remove_pretraining_modules()
+# 
+        model = HubertRobustModel(cfg, task.cfg, task.dictionaries, teacher)
+#         model.teacher, _, _ = checkpoint_utils.load_model_ensemble_and_task([cfg.teacher])
+
         if cfg.init is not None:
             state = checkpoint_utils.load_checkpoint_to_cpu(cfg.init, {})
-            model.load_state_dict(state["model"], strict=True)
+            model.load_state_dict(state["model"], strict=False)
             logger.info(f"model initialized from {cfg.init}")
+
         return model
 
     def apply_mask(self, x, padding_mask, target_list):
@@ -454,8 +525,14 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
     ) -> Dict[str, torch.Tensor]:
         """output layer is 1-based"""
 
-        if source_aug is not None:
-            source = source_aug
+        # pdb.set_trace()
+        with torch.no_grad():
+            teacher_result = self.teacher.forward(
+                    source=source, target_list=target_list, padding_mask=padding_mask,
+                    mask=mask, features_only=features_only, output_layer=output_layer)
+
+        assert source_aug is not None, "source aug is None"
+        source = source_aug
 
         features = self.forward_features(source)
         if target_list is not None:
@@ -525,7 +602,7 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
             logit_m_list = [None for _ in target_list]
 
         if not self.skip_nomask:
-            nomask_indices = torch.logical_and(~padding_mask, ~mask_indices)
+            nomask_indices = torch.logical_and(~padding_mask, ~mask_indices) if mask_indices is not None else ~padding_mask
             proj_x_u = self.final_proj(x[nomask_indices])
             if self.untie_final_proj:
                 proj_x_u_list = proj_x_u.chunk(len(target_list), dim=-1)
@@ -539,9 +616,18 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
         else:
             logit_u_list = [None for _ in target_list]
 
+        if mask_indices is not None:
+            teacher_logit_m_list = [teacher_logit[mask_indices.flatten()] for teacher_logit in teacher_result["logit_u_list"]]
+            teacher_logit_u_list = [teacher_logit[~mask_indices.flatten()] for teacher_logit in teacher_result["logit_u_list"]]
+        else:
+            teacher_logit_m_list = [None]
+            teacher_logit_u_list = teacher_result["logit_u_list"]
+
         result = {
-            "logit_m_list": logit_m_list,
-            "logit_u_list": logit_u_list,
+            "teacher_logit_m_list": teacher_logit_m_list,
+            "teacher_logit_u_list": teacher_logit_u_list,
+            "student_logit_m_list": logit_m_list,
+            "student_logit_u_list": logit_u_list,
             "padding_mask": padding_mask,
             "features_pen": features_pen,
         }
@@ -567,9 +653,9 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
 
     def get_logits(self, net_output, is_masked=True):
         if is_masked:
-            logits_list = net_output["logit_m_list"]
+            logits_list = net_output["student_logit_m_list"]
         else:
-            logits_list = net_output["logit_u_list"]
+            logits_list = net_output["student_logit_u_list"]
         logits_list = [x.float() for x in logits_list if x is not None]
         return logits_list
 
@@ -586,7 +672,53 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
             extra_losses.append(net_output["features_pen"])
             names.append("features_pen")
 
+        teacher_feature_info, teacher_features = zip(*[hook_hidden for hook_hidden in self._hook_hiddens if "teacher" in hook_hidden[0]])
+        student_feature_info, student_features = zip(*[hook_hidden for hook_hidden in self._hook_hiddens if "teacher" not in hook_hidden[0]])
+
+        loss_kd = 0
+        if self.teacher_layer_weights is not None:
+            assert self.compute_kd_layer_interval == 1
+
+            weighted_features = self._weighted_sum(teacher_features, self.teacher_layer_weights)
+            loss_kd += self.criterion_kd_l1(weighted_feature, student_features[-1])
+            student_features = student_features[:-1]
+       
+        # pdb.set_trace()
+        for teacher_feature, student_feature in zip(teacher_features, student_features):
+            loss_kd += self.criterion_kd_l1(teacher_feature, student_feature)
+        loss_kd *= self.compute_kd_layer_interval
+        self._hook_hiddens.clear()
+        names.append("kd")
+
+        loss_kd_last_m, loss_kd_last_u = 0, 0
+        for teacher_logit_m, student_logit_m in zip(net_output["teacher_logit_m_list"], net_output["student_logit_m_list"]):
+            if teacher_logit_m is not None:
+                loss_kd_last_m += self.criterion_kd_kld(F.log_softmax(teacher_logit_m, dim=-1), F.softmax(student_logit_m, dim=-1))
+        names.append("kd_last_m")
+
+        for teacher_logit_u, student_logit_u in zip(net_output["teacher_logit_u_list"], net_output["student_logit_u_list"]):
+            loss_kd_last_u += self.criterion_kd_kld(F.log_softmax(teacher_logit_u, dim=-1), F.softmax(student_logit_u, dim=-1))
+        names.append("kd_last_u")
+
+        extra_losses.extend([loss_kd, loss_kd_last_m, loss_kd_last_u])
+
         return extra_losses, names
+
+    def _weighted_sum(self, feature, weights):
+        stacked_feature = torch.stack(feature, dim=0)
+
+        _, *origin_shape = stacked_feature.shape
+        stacked_feature = stacked_feature.view(self.layer_num, -1)
+        norm_weights = F.softmax(self.weights, dim=-1)
+
+#         if self.normalize:
+#             stacked_feature = F.layer_norm(
+#                 stacked_feature, (stacked_feature.shape[-1],))
+
+        weighted_feature = (norm_weights.unsqueeze(-1) * stacked_feature).sum(dim=0)
+        weighted_feature = weighted_feature.view(*origin_shape)
+
+        return weighted_feature
 
     def remove_pretraining_modules(self):
         self.target_glu = None

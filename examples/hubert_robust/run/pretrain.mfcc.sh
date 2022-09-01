@@ -7,11 +7,11 @@ set -u
 set -o pipefail
 
 config_name=hubert_base_librispeech
-config_dir=config/pretrain/iter1/8gpu
+config_dir=config/pretrain/iter1/16gpu/8x2
 expdir=exp
 hubert_tag=
 data=data/ls_960
-label=dump/raw/ls_960/km_from_mfcc_ls960/
+label=/mnt/lustre02/scratch/sjtu/home/ww089/fairseqs/fairseq-220604/examples/hubert_robust/dump/raw/ls_960/labels/km100_from_mfcc
 
 export NCCL_DEBUG=INFO
 export NCCP_P2P_DISABLE=1
@@ -28,6 +28,7 @@ if [ -z "${hubert_tag}" ]; then
 fi
 hubert_exp=$expdir/${hubert_tag}
 
+# CUDA_VISIBLE_DEVICES=1 fairseq-hydra-train \
 fairseq-hydra-train \
   --config-dir ${config_dir} \
   --config-name ${config_name} \

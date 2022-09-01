@@ -514,7 +514,7 @@ class HubertModel(BaseFairseqModel):
             logit_m_list = [None for _ in target_list]
 
         if not self.skip_nomask:
-            nomask_indices = torch.logical_and(~padding_mask, ~mask_indices)
+            nomask_indices = torch.logical_and(~padding_mask, ~mask_indices) if mask_indices is not None else ~padding_mask
             proj_x_u = self.final_proj(x[nomask_indices])
             if self.untie_final_proj:
                 proj_x_u_list = proj_x_u.chunk(len(target_list), dim=-1)

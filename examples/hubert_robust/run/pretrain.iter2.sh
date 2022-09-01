@@ -7,12 +7,14 @@ set -u
 set -o pipefail
 
 config_name=hubert_base_librispeech
-config_dir=config/pretrain/iter2/8gpu
+# config_dir=config/pretrain/iter2/8gpu
+config_dir=config/pretrain/iter1/16gpu/8x2
 # config_dir=config/pretrain/iter2/1gpu
 expdir=exp
 hubert_tag=
 data=data/ls_960
-label=dump/raw/ls_960/km_from_hubert_base_iter1_L6_ls960/
+# label=dump/raw/ls_960/km_from_hubert_base_iter1_L6_ls960/
+label=/mnt/lustre02/scratch/sjtu/home/ww089/fairseqs/fairseq-220604/examples/hubert_robust/dump/raw/ls_960/reproduce/iter1/km_from_hubert_base_ls960_L6
 
 export NCCL_DEBUG=INFO
 export NCCP_P2P_DISABLE=1

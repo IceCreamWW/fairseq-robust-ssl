@@ -294,7 +294,6 @@ class HubertDataset(FairseqDataset):
         collated_audios, padding_mask, audio_starts = self.collater_audio(
             audios, audio_size
         )
-
         audios_aug = [s["source_aug"] for s in samples]
         if audios_aug[0] is not None:
             collated_audios_aug, *_ = self.collater_audio(audios_aug, audio_size)

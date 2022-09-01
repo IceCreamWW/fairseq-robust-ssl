@@ -314,7 +314,6 @@ class HubertEncoder(FairseqEncoder):
 
     def forward(self, source, padding_mask, tbc=True, **kwargs):
 
-        # pdb.set_trace()
         w2v_args = {
             "source": source,
             "padding_mask": padding_mask,

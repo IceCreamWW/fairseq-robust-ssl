@@ -292,7 +292,6 @@ class HubertEncoderWs(FairseqEncoder, Hookable):
         }
 
         ft = self.freeze_finetune_updates <= self.num_updates
-        assert not ft, "ws is not designed to finetune hubert encoder"
 
         with torch.no_grad() if not ft else contextlib.ExitStack():
             x, padding_mask = self.w2v_model.extract_features(**w2v_args)

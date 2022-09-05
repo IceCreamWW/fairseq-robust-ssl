@@ -14,11 +14,10 @@ checkpoint:
 
 
 distributed_training:
-    # ddp_backend: no_c10d
-  ddp_backend: legacy_ddp
+  ddp_backend: no_c10d
   distributed_backend: 'nccl'
   distributed_world_size: 8
-  distributed_port: 29671
+  distributed_port: 28175
   nprocs_per_node: 1
   find_unused_parameters: true
 
@@ -27,6 +26,10 @@ task:
   data: ???
   label_dir: ???
   labels: ???
+  noises: ???
+  num_noise: ???
+  noise_snr: ???
+  aug_types: ???
   label_rate: ${model.label_rate}
   sample_rate: 16000
   max_sample_size: 250000
@@ -38,21 +41,22 @@ task:
 dataset:
   num_workers: 2
   # max_tokens: 1400000
-  max_tokens: 800000
+  max_tokens: 500000
   skip_invalid_size_inputs_valid_test: true
   validate_interval: 5
   validate_interval_updates: 10000
 
 criterion:
-  _name: hubert
+  _name: hubert_robust
+  use_target_loss: false
   pred_masked_weight: 1.0
   pred_nomask_weight: 0.0
-  loss_weights: [10,]
+  loss_weights: [10, 1000, 0, 500]
 
 optimization:
-  max_update: 400000
-  update_freq: [7]
-  lr: [0.0005]
+  max_update: 250000
+  update_freq: [8]
+  lr: [0.0002]
   clip_norm: 10.0
 
 optimizer:
@@ -63,25 +67,41 @@ optimizer:
 
 lr_scheduler:
   _name: polynomial_decay
-  warmup_updates: 32000
+  warmup_updates: 16000
 
 model:
-  _name: hubert
+  _name: hubert_robust
+  teacher: ???
+  teacher_layer_weights: ???
   label_rate: ???
-  skip_masked: false
+  init: ???
+  # skip_masked: false
+  skip_masked: true
   skip_nomask: false
-  mask_prob: 0.80
+  # mask_prob: 0.80
+  mask_prob: 0.0
   extractor_mode: default
+  encoder_layers: 13
   conv_feature_layers: '[(512,10,5)] + [(512,3,2)] * 4 + [(512,2,2)] * 2'
   final_dim: 256
-  encoder_layerdrop: 0.05
+  encoder_layerdrop: 0.0
   dropout_input: 0.1
   dropout_features: 0.1
   dropout: 0.1
   attention_dropout: 0.1
+  freeze_last_layer_updates: 20000
+
+  # for debug
+  #   encoder_layerdrop: 0.0
+  #   dropout_input: 0.0
+  #   dropout_features: 0.0
+  #   dropout: 0.0
+  #   attention_dropout: 0.0
+
   feature_grad_mult: 0.1
   untie_final_proj: true
   activation_dropout: 0.0
+  compute_kd_layer_interval: 1
 
 hydra:
   job:

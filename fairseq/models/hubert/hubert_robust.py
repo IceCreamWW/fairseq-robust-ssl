@@ -73,6 +73,10 @@ class HubertRobustConfig(FairseqDataclass):
     layer_type: LAYER_TYPE_CHOICES = field(
         default="transformer", metadata={"help": "layer type in encoder"}
     )
+    freeze_last_layer_updates: int = field(
+        default=1_000_000,
+        metadata={"help": "dont finetune hubert for this many updates"},
+    )
 
     # dropouts
     dropout: float = field(
@@ -342,6 +346,7 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
         self.teacher_layer_weights = teacher_layer_weights
 
         self.compute_kd_layer_interval = cfg.compute_kd_layer_interval
+        self.freeze_last_layer_updates = cfg.freeze_last_layer_updates
 
         if len(self.hooks) == 0:
             for module_name in ["self.teacher.encoder.layers", "self.encoder.layers"]:
@@ -411,10 +416,11 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
 
         teacher_layer_weights = None
         if cfg.teacher_layer_weights is not None:
-            pdb.set_trace()
+            teacher_layer_weights = torch.load(cfg.teacher_layer_weights)
+            teacher_layer_weights = F.softmax(teacher_layer_weights, dim=-1)
 #         teacher.remove_pretraining_modules()
 # 
-        model = HubertRobustModel(cfg, task.cfg, task.dictionaries, teacher)
+        model = HubertRobustModel(cfg, task.cfg, task.dictionaries, teacher, teacher_layer_weights)
 #         model.teacher, _, _ = checkpoint_utils.load_model_ensemble_and_task([cfg.teacher])
 
         if cfg.init is not None:
@@ -564,10 +570,14 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
         # x: (B, T, D), float
         # padding_mask: (B, T), bool
         # mask_indices: (B, T), bool
+
+        detach_from_layer = len(self.encoder.layers) - 2 if self.freeze_last_layer_updates <= self.num_updates else None
+
         x, layer_results = self.encoder(
             x,
             padding_mask=padding_mask,
             layer=None if output_layer is None else output_layer - 1,
+            detach_from_layer=None,
         )
 
         if features_only:
@@ -679,11 +689,14 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
         if self.teacher_layer_weights is not None:
             assert self.compute_kd_layer_interval == 1
 
-            weighted_features = self._weighted_sum(teacher_features, self.teacher_layer_weights)
-            loss_kd += self.criterion_kd_l1(weighted_feature, student_features[-1])
+            weighted_features = self._weighted_sum(teacher_features)
+            loss_kd += self.criterion_kd_l1(weighted_features, student_features[-1])
             student_features = student_features[:-1]
        
-        # pdb.set_trace()
+#         if self.teacher_layer_weights is not None:
+#             pdb.set_trace()
+
+        assert len(teacher_features) == len(student_features)
         for teacher_feature, student_feature in zip(teacher_features, student_features):
             loss_kd += self.criterion_kd_l1(teacher_feature, student_feature)
         loss_kd *= self.compute_kd_layer_interval
@@ -704,21 +717,27 @@ class HubertRobustModel(BaseFairseqModel, Hookable):
 
         return extra_losses, names
 
-    def _weighted_sum(self, feature, weights):
+    def _weighted_sum(self, feature):
         stacked_feature = torch.stack(feature, dim=0)
 
         _, *origin_shape = stacked_feature.shape
-        stacked_feature = stacked_feature.view(self.layer_num, -1)
-        norm_weights = F.softmax(self.weights, dim=-1)
+        stacked_feature = stacked_feature.view(self.teacher_layer_weights.shape[0], -1)
 
 #         if self.normalize:
 #             stacked_feature = F.layer_norm(
 #                 stacked_feature, (stacked_feature.shape[-1],))
 
-        weighted_feature = (norm_weights.unsqueeze(-1) * stacked_feature).sum(dim=0)
+        self.teacher_layer_weights = self.teacher_layer_weights.to(stacked_feature.device)
+        weighted_feature = (self.teacher_layer_weights.unsqueeze(-1) * stacked_feature).sum(dim=0)
         weighted_feature = weighted_feature.view(*origin_shape)
 
         return weighted_feature
+
+    def set_num_updates(self, num_updates):
+        """Set the number of parameters updates."""
+        super().set_num_updates(num_updates)
+        self.num_updates = num_updates
+
 
     def remove_pretraining_modules(self):
         self.target_glu = None
